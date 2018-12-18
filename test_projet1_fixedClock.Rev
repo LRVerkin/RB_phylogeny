@@ -1,0 +1,81 @@
+######## FIRST QUESTION #########
+
+# CHARACTERISTICS:
+## STRICT clock
+## fixed root (443 mil years)
+
+
+## read in the tree 
+T <- readTrees("data/vertebrate_Poisson_NJ.tree")[1]
+T
+### get helpful variables from the tree
+n_taxa <- T.ntips()
+taxa <- T.taxa()
+num_branches <- 2 * n_taxa - 2
+
+
+### Load the sequence alignment
+D <- readDiscreteCharacterData(file="data/aln_prot.nex")
+
+n_sites <- D.nchar()
+
+mvi=0
+###
+root_time = 443
+
+#diversification = speciation rate lambda - extinction rate mu
+diversification ~ dnExponential(10.0) 
+#turnover is r = mu/lambda
+turnover ~ dnBeta(2.0, 2.0) 
+denom := abs(1.0 - turnover)    
+#and then we... find lambda and mu again? What's the point?
+birth_rate := diversification / denom
+death_rate := (turnover * diversification) / denom
+clock_rate ~ dnGamma(2.0,4.0) #OUPS, À CHANGER
+
+#rho = sampling probability: nb of species used in the alignment (here 23)
+# total number of vertebrate species: ~40,000
+rho <- 23/40000
+moves[mvi++] = mvScale(diversification, lambda=5.0, tune=true, weight=10.0)
+moves[mvi++] = mvSlide(turnover,delta=5.0,tune=true,weight=10.0)
+
+
+Q <- fnWAG() 
+treetime~ dnBDP(lambda=birth_rate, mu=death_rate, rho=rho, rootAge=root_time, samplingStrategy="uniform", condition="nTaxa", taxa=taxa)
+T.makeUltrametric()
+T.rescale(root_time/T.rootAge())
+treetime.setValue(T)
+print("TIME TREE IS ")
+print(treetime)
+
+moves[mvi++] = mvNodeTimeSlideUniform(treetime, weight=50.0)
+moves[mvi++] = mvScale(clock_rate,lambda=0.5,tune=true,weight=5.0)
+
+seq ~ dnPhyloCTMC(tree=treetime, Q=Q, branchRates=clock_rate, type="AA")
+#Once the PhyloCTMC model has been created, we can attach our sequence data to the tip nodes in the tree.
+seq.clamp(D)
+
+#This monitor takes all of the named parameters in the model DAG and saves their value to a file. Thus, every variable that you gave a name in your model files will be written to your log file
+monitors[1] = mnModel(filename="output/mcmc.log", printgen=10)
+#Tree
+monitors[2] = mnFile(filename="output/mcmc.trees", printgen=10, treetime)
+#plot on Screen 
+#monitors[3] = mnScreen(printgen=10, root_time, tmrca_Ursidae)
+
+mymodel = model(treetime)
+mymcmc = mcmc(mymodel, monitors, moves)
+
+#mymcmc.burnin(generations=100,tuningInterval=100)
+mymcmc.run(generations=1000)
+
+mymcmc.operatorSummary()
+
+
+
+tt = readTreeTrace("output/mcmc.trees", "clock")
+tt.summarize()
+
+### write MAP tree to file
+mapTree(tt, "output/mcmc_MAP.tre")
+
+
